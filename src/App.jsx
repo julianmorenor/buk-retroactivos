@@ -244,6 +244,17 @@ function App() {
           </div>
         </header>
 
+        {/* Beta Warning Banner */}
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex gap-3 items-start">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="text-sm text-red-900">
+            <p className="font-semibold mb-0.5">Versión Beta (No Oficial)</p>
+            <p className="opacity-90">
+              Esta es una versión beta. Buk como compañía no respalda ni se hace responsable por esta herramienta hasta que sea lanzada como una versión oficial.
+            </p>
+          </div>
+        </div>
+
         {/* Privacy Banner */}
         <div className="bg-brand-light/30 border border-brand-muted/30 rounded-xl p-4 flex gap-3 items-start">
           <Info className="w-5 h-5 text-brand-primary shrink-0 mt-0.5" />
