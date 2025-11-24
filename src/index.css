@@ -1,0 +1,14 @@
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Source Sans Pro", sans-serif;
+
+  --color-brand-primary: #2f4daa;
+  --color-brand-secondary: #2e6ec9;
+  --color-brand-dark: #2b3b6a;
+  --color-brand-light: #d9e3fc;
+  --color-brand-muted: #739fdb;
+  --color-brand-accent: #f9b82c;
+  --color-brand-orange: #f59121;
+}
