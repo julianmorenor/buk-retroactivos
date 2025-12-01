@@ -8,7 +8,9 @@ import {
   CheckCircle2,
   Trash2,
   ShieldCheck,
-  Info
+  Info,
+  CalendarDays,
+  CalendarRange
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clsx } from 'clsx';
@@ -29,55 +31,229 @@ const FACTORS = {
   RN: 0.35
 };
 
-const calculateRetroactive = (data) => {
-  const oldSalary = parseFloat(data.SUELDO_ANTERIOR) || 0;
-  const newSalary = parseFloat(data.SUELDO_NUEVO) || 0;
-  const months = parseFloat(data.MESES_RETRO) || 0;
+const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
 
-  const baseDiff = newSalary - oldSalary;
+/**
+ * Returns an array of closed periods between two dates based on payroll type.
+ * Supports YYYY-MM-DD and DD/MM/YYYY input formats.
+ * @param {string} startStr 
+ * @param {string} endStr 
+ * @param {'mensual'|'quincenal'} type 
+ * @returns {Array<{start: string, end: string}>} Array of period objects
+ */
+const getPeriods = (startStr, endStr, type) => {
+  if (!startStr || !endStr) return [];
 
-  // 1. Retroactivo Sueldo
-  const retroSalary = baseDiff * months;
+  // Helper to parse date strings
+  const parseDate = (str) => {
+    if (typeof str !== 'string') return [0, 0, 0];
 
-  const results = [];
+    // Try YYYY-MM-DD
+    if (str.includes('-')) {
+      const parts = str.split('-').map(Number);
+      if (parts[0] > 1000) return parts; // YYYY-MM-DD
+      return [parts[2], parts[1], parts[0]]; // DD-MM-YYYY fallback
+    }
+    // Try DD/MM/YYYY
+    if (str.includes('/')) {
+      const parts = str.split('/').map(Number);
+      return [parts[2], parts[1], parts[0]]; // DD/MM/YYYY
+    }
+    return [0, 0, 0];
+  };
 
-  if (retroSalary > 0) {
-    results.push({
-      CEDULA: data.CEDULA,
-      NOMBRE: data.NOMBRE,
-      CONCEPTO: 'Retroactivo sueldo',
-      VALOR_A_PAGAR: Math.round(retroSalary)
-    });
-  }
+  const [sY, sM, sD] = parseDate(startStr);
+  const [eY, eM, eD] = parseDate(endStr);
 
-  // 2. Retroactivo Horas Extras
-  // Formula: ((Diferencia_Base / 240) * Factor * Cantidad)
-  const hourlyDiff = baseDiff / 240;
+  // Validate parsing
+  if (!sY || !eY || isNaN(sY) || isNaN(eY)) return [];
 
-  const otTypes = [
-    { key: 'HED_CANTIDAD', factor: FACTORS.HED, label: 'Retroactivo HE diurna' },
-    { key: 'HEN_CANTIDAD', factor: FACTORS.HEN, label: 'Retroactivo HE nocturna' },
-    { key: 'HEFD_CANTIDAD', factor: FACTORS.HEFD, label: 'Retroactivo HE festiva diurna' },
-    { key: 'HEFN_CANTIDAD', factor: FACTORS.HEFN, label: 'Retroactivo HE festiva nocturna' },
-    { key: 'RN_CANTIDAD', factor: FACTORS.RN, label: 'Retroactivo recargo nocturno' }
-  ];
+  // Normalize months to 0-indexed
+  const startMonthIndex = sM - 1;
+  const endMonthIndex = eM - 1;
 
-  otTypes.forEach(type => {
-    const qty = parseFloat(data[type.key]) || 0;
-    if (qty > 0) {
-      const value = hourlyDiff * type.factor * qty;
-      if (value > 0) {
-        results.push({
-          CEDULA: data.CEDULA,
-          NOMBRE: data.NOMBRE,
-          CONCEPTO: type.label,
-          VALOR_A_PAGAR: Math.round(value)
+  const periods = [];
+  let currentY = sY;
+  let currentM = startMonthIndex;
+
+  // Iterate through each month involved
+  while (currentY < eY || (currentY === eY && currentM <= endMonthIndex)) {
+    const daysInMonth = getDaysInMonth(currentY, currentM);
+
+    // Format helper (Internal format is always YYYY-MM-DD)
+    const fmt = (d) => `${currentY}-${String(currentM + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+    if (type === 'mensual') {
+      // Rule: Must cover FULL month (1st to Last Day)
+      let isFull = true;
+      if (currentY === sY && currentM === startMonthIndex && sD > 1) isFull = false;
+      if (currentY === eY && currentM === endMonthIndex && eD < daysInMonth) isFull = false;
+
+      if (isFull) {
+        periods.push({
+          start: fmt(1),
+          end: fmt(daysInMonth)
+        });
+      }
+
+    } else { // quincenal
+      // Q1: 1st to 15th
+      let q1Valid = true;
+      if (currentY === sY && currentM === startMonthIndex && sD > 1) q1Valid = false;
+      if (currentY === eY && currentM === endMonthIndex && eD < 15) q1Valid = false;
+
+      if (q1Valid) {
+        periods.push({
+          start: fmt(1),
+          end: fmt(15)
+        });
+      }
+
+      // Q2: 16th to Last Day
+      let q2Valid = true;
+      if (currentY === sY && currentM === startMonthIndex && sD > 16) q2Valid = false;
+      if (currentY === eY && currentM === endMonthIndex && eD < daysInMonth) q2Valid = false;
+
+      if (q2Valid) {
+        periods.push({
+          start: fmt(16),
+          end: fmt(daysInMonth)
         });
       }
     }
+
+    // Advance
+    currentM++;
+    if (currentM > 11) {
+      currentM = 0;
+      currentY++;
+    }
+  }
+
+  return periods;
+};
+
+const calculateRetroactive = (data, payrollType) => {
+  const oldSalary = parseFloat(data.SUELDO_ANTERIOR) || 0;
+  const newSalary = parseFloat(data.SUELDO_NUEVO) || 0;
+
+  // Get list of valid periods
+  const periods = getPeriods(data.FECHA_INICIO, data.FECHA_FIN, payrollType);
+
+  if (periods.length === 0) {
+    return { details: [], summaries: [] };
+  }
+
+  const baseDiff = newSalary - oldSalary;
+
+  // Calculate Retro Salary per period
+  // Mensual: Diff * 1
+  // Quincenal: Diff * 0.5
+  const salaryFactor = payrollType === 'mensual' ? 1 : 0.5;
+  const retroSalaryPerPeriod = baseDiff * salaryFactor;
+
+  // Calculate OT Retro (Total for the whole range)
+  const hourlyDiff = baseDiff / 240;
+  const otMapping = [
+    {
+      key: 'HED_CANTIDAD',
+      factor: FACTORS.HED,
+      label: 'Retroactivo HE diurna',
+      reportValKey: 'Devengos Prestacionales - Hora Extra Diurna Ordinaria (1.25)',
+      reportQtyKey: 'Comprobante - Hora Extra Diurna Ordinaria (1.25)'
+    },
+    {
+      key: 'HEN_CANTIDAD',
+      factor: FACTORS.HEN,
+      label: 'Retroactivo HE nocturna',
+      reportValKey: 'Devengos Prestacionales - Hora Extra Nocturna (1.75)',
+      reportQtyKey: 'Comprobante - Hora Extra Nocturna (1.75)'
+    },
+    {
+      key: 'HEFD_CANTIDAD',
+      factor: FACTORS.HEFD,
+      label: 'Retroactivo HE festiva diurna',
+      reportValKey: 'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.00)',
+      reportQtyKey: 'Comprobante - Hora Extra Diurna Dominical y Festivos (2.00)'
+    },
+    {
+      key: 'HEFN_CANTIDAD',
+      factor: FACTORS.HEFN,
+      label: 'Retroactivo HE festiva nocturna',
+      reportValKey: 'Devengos Prestacionales - Hora Extra Nocturna Dominical Y Festivos (2.55)',
+      reportQtyKey: 'Comprobante - Hora Extra Nocturna Dominical Y Festivos (2.55)'
+    }
+  ];
+
+  const details = [];
+  const summaries = [];
+
+  // Iterate over periods to generate rows
+  periods.forEach((period, index) => {
+    // Format start date for report: DD/MM/YYYY
+    const [pY, pM, pD] = period.start.split('-');
+    const formattedStartDate = `${pD}/${pM}/${pY}`;
+
+    const summary = {
+      'Comprobante - Período': formattedStartDate,
+      'Colaborador - Nombre Completo': data.NOMBRE,
+      'Colaborador - Número de Documento': data.CEDULA,
+      'Colaborador - Código de Ficha': data.CODIGO_FICHA_COLABORADOR || '',
+      'Devengos Prestacionales - Salario': 0,
+      'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.00)': 0,
+      'Comprobante - Hora Extra Diurna Dominical y Festivos (2.00)': 0,
+      'Devengos Prestacionales - Hora Extra Diurna Ordinaria (1.25)': 0,
+      'Comprobante - Hora Extra Diurna Ordinaria (1.25)': 0,
+      'Devengos Prestacionales - Hora Extra Nocturna (1.75)': 0,
+      'Comprobante - Hora Extra Nocturna (1.75)': 0,
+      'Devengos Prestacionales - Hora Extra Nocturna Dominical Y Festivos (2.55)': 0,
+      'Comprobante - Hora Extra Nocturna Dominical Y Festivos (2.55)': 0,
+    };
+
+    // Add Salary Retro
+    if (retroSalaryPerPeriod > 0) {
+      const val = Math.round(retroSalaryPerPeriod);
+      summary['Devengos Prestacionales - Salario'] = val;
+
+      details.push({
+        CEDULA: data.CEDULA,
+        NOMBRE: data.NOMBRE,
+        CONCEPTO: 'Retroactivo sueldo',
+        DETALLE: `Periodo ${formattedStartDate}`,
+        VALOR_A_PAGAR: val
+      });
+    }
+
+    // Add OT Retro ONLY to the FIRST period
+    if (index === 0) {
+      otMapping.forEach(type => {
+        const qty = parseFloat(data[type.key]) || 0;
+        if (qty > 0) {
+          const value = hourlyDiff * type.factor * qty;
+          if (value > 0) {
+            const roundedVal = Math.round(value);
+
+            if (type.reportValKey) {
+              summary[type.reportValKey] = roundedVal;
+              summary[type.reportQtyKey] = qty;
+            }
+
+            details.push({
+              CEDULA: data.CEDULA,
+              NOMBRE: data.NOMBRE,
+              CONCEPTO: type.label,
+              DETALLE: `${qty} horas`,
+              VALOR_A_PAGAR: roundedVal
+            });
+          }
+        }
+      });
+    }
+
+    summaries.push(summary);
   });
 
-  return results;
+  return { details, summaries };
 };
 
 // --- UI Components ---
@@ -111,15 +287,58 @@ const Button = ({ children, variant = 'primary', className, ...props }) => {
   );
 };
 
-const Input = ({ label, ...props }) => (
+const Input = ({ label, error, ...props }) => (
   <div className="space-y-1.5">
-    <label className="text-sm font-medium text-brand-dark">{label}</label>
+    <label className="text-sm font-medium text-brand-dark flex justify-between">
+      {label}
+      {error && <span className="text-xs text-red-500 font-normal">Requerido</span>}
+    </label>
     <input
-      className="w-full px-3 py-2 rounded-lg border border-brand-muted/50 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary outline-none transition-all text-brand-dark"
+      className={cn(
+        "w-full px-3 py-2 rounded-lg border outline-none transition-all text-brand-dark",
+        error
+          ? "border-red-300 focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-red-50/30"
+          : "border-brand-muted/50 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary"
+      )}
       {...props}
     />
   </div>
 );
+
+const DateInput = ({ label, error, ...props }) => {
+  const inputRef = useRef(null);
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium text-brand-dark flex justify-between">
+        {label}
+        {error && <span className="text-xs text-red-500 font-normal">Requerido</span>}
+      </label>
+      <div
+        className="relative group cursor-pointer"
+        onClick={() => inputRef.current?.showPicker()}
+      >
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <CalendarDays className={cn(
+            "h-5 w-5 transition-colors",
+            error ? "text-red-400" : "text-brand-muted group-hover:text-brand-primary"
+          )} />
+        </div>
+        <input
+          ref={inputRef}
+          type="date"
+          className={cn(
+            "w-full pl-10 pr-3 py-2 rounded-lg border outline-none transition-all text-brand-dark cursor-pointer appearance-none",
+            error
+              ? "border-red-300 focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-red-50/30"
+              : "border-brand-muted/50 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary bg-white"
+          )}
+          {...props}
+        />
+      </div>
+    </div>
+  );
+};
 
 const Badge = ({ children, variant = 'default' }) => {
   const variants = {
@@ -134,20 +353,46 @@ const Badge = ({ children, variant = 'default' }) => {
   );
 };
 
+const Toggle = ({ options, value, onChange }) => {
+  return (
+    <div className="flex bg-slate-100 p-1 rounded-lg">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "flex-1 py-1.5 px-3 rounded-md text-sm font-medium transition-all",
+            value === option.value
+              ? "bg-white text-brand-primary shadow-sm"
+              : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
 // --- Main Application ---
 
 function App() {
   const [activeTab, setActiveTab] = useState('individual');
-  const [results, setResults] = useState([]);
+  const [payrollType, setPayrollType] = useState('mensual'); // 'mensual' | 'quincenal'
+
+  const [results, setResults] = useState([]); // Array of detail objects for UI
+  const [reportData, setReportData] = useState([]); // Array of summary objects for Excel
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
 
   // Individual Form State
   const [formData, setFormData] = useState({
-
     SUELDO_ANTERIOR: '',
     SUELDO_NUEVO: '',
-    MESES_RETRO: '',
+    FECHA_INICIO: '',
+    FECHA_FIN: '',
     HED_CANTIDAD: '',
     HEN_CANTIDAD: '',
     HEFD_CANTIDAD: '',
@@ -157,14 +402,37 @@ function App() {
 
   const handleIndividualCalculate = (e) => {
     e.preventDefault();
+
+    const newErrors = {};
+    if (!formData.SUELDO_ANTERIOR) newErrors.SUELDO_ANTERIOR = true;
+    if (!formData.SUELDO_NUEVO) newErrors.SUELDO_NUEVO = true;
+    if (!formData.FECHA_INICIO) newErrors.FECHA_INICIO = true;
+    if (!formData.FECHA_FIN) newErrors.FECHA_FIN = true;
+
+    setFieldErrors(newErrors);
+
+    if (Object.keys(newErrors).length > 0) {
+      // Don't set global error, just return. The fields will show red.
+      return;
+    }
+
     try {
-      const calculated = calculateRetroactive({
+      const { details, summaries } = calculateRetroactive({
         ...formData,
         CEDULA: '-',
-        NOMBRE: 'Simulación'
-      });
-      setResults(calculated);
-      setError(null);
+        NOMBRE: 'Simulación',
+        CODIGO_FICHA_COLABORADOR: '-'
+      }, payrollType);
+
+      if (details.length === 0) {
+        setError("No se generaron resultados. Verifique que las fechas cubran periodos cerrados completos.");
+        setResults([]);
+        setReportData([]);
+      } else {
+        setResults(details);
+        setReportData(summaries);
+        setError(null);
+      }
     } catch (err) {
       setError("Error en el cálculo. Verifique los datos.");
     }
@@ -177,20 +445,50 @@ function App() {
     setIsProcessing(true);
     setError(null);
     setResults([]);
+    setReportData([]);
 
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, dateNF: 'yyyy-mm-dd' });
+
+      if (jsonData.length === 0) {
+        throw new Error("El archivo parece estar vacío o no se pudieron leer datos.");
+      }
 
       if (jsonData.length > 10000) {
         throw new Error("El archivo excede el límite de 10.000 filas.");
       }
 
-      const allResults = jsonData.flatMap(row => calculateRetroactive(row));
-      setResults(allResults);
+      // Validate headers
+      const firstRow = jsonData[0];
+      const requiredKeys = ['FECHA_INICIO', 'FECHA_FIN', 'SUELDO_ANTERIOR', 'SUELDO_NUEVO'];
+      const missingKeys = requiredKeys.filter(key => !(key in firstRow));
+
+      if (missingKeys.length > 0) {
+        throw new Error(`Faltan columnas requeridas en el archivo: ${missingKeys.join(', ')}. Por favor use la plantilla.`);
+      }
+
+      const allDetails = [];
+      const allSummaries = [];
+
+      jsonData.forEach(row => {
+        const { details, summaries } = calculateRetroactive(row, payrollType);
+        allDetails.push(...details);
+        allSummaries.push(...summaries);
+      });
+
+      if (allDetails.length === 0) {
+        setError("El archivo se procesó pero no se generaron resultados. Verifique que las fechas tengan el formato correcto (AAAA-MM-DD o DD/MM/AAAA) y cubran periodos válidos.");
+      } else {
+        setResults(allDetails);
+        setReportData(allSummaries);
+      }
+
     } catch (err) {
+      console.error(err);
       setError(err.message || "Error al procesar el archivo.");
     } finally {
       setIsProcessing(false);
@@ -199,9 +497,9 @@ function App() {
 
   const downloadTemplate = () => {
     const headers = [
-      "CEDULA", "NOMBRE", "SUELDO_ANTERIOR", "SUELDO_NUEVO",
-      "MESES_RETRO", "HED_CANTIDAD", "HEN_CANTIDAD",
-      "HEFD_CANTIDAD", "HEFN_CANTIDAD", "RN_CANTIDAD"
+      "CEDULA", "NOMBRE", "CODIGO_FICHA_COLABORADOR", "SUELDO_ANTERIOR", "SUELDO_NUEVO",
+      "FECHA_INICIO", "FECHA_FIN", "HED_CANTIDAD", "HEN_CANTIDAD",
+      "HEFD_CANTIDAD", "HEFN_CANTIDAD"
     ];
     const ws = XLSX.utils.aoa_to_sheet([headers]);
     const wb = XLSX.utils.book_new();
@@ -210,8 +508,8 @@ function App() {
   };
 
   const downloadReport = () => {
-    if (results.length === 0) return;
-    const ws = XLSX.utils.json_to_sheet(results);
+    if (reportData.length === 0) return;
+    const ws = XLSX.utils.json_to_sheet(reportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Reporte");
     XLSX.writeFile(wb, "reporte_retroactivos.xlsx");
@@ -298,7 +596,7 @@ function App() {
                 </button>
               </div>
 
-              <div className="p-5">
+              <div className="p-5 space-y-5">
                 {activeTab === 'individual' ? (
                   <form onSubmit={handleIndividualCalculate} className="space-y-4">
 
@@ -308,24 +606,49 @@ function App() {
                         type="number"
                         value={formData.SUELDO_ANTERIOR}
                         onChange={e => setFormData({ ...formData, SUELDO_ANTERIOR: e.target.value })}
-                        required
+                        error={fieldErrors.SUELDO_ANTERIOR}
                       />
                       <Input
                         label="Sueldo nuevo"
                         type="number"
                         value={formData.SUELDO_NUEVO}
                         onChange={e => setFormData({ ...formData, SUELDO_NUEVO: e.target.value })}
-                        required
+                        error={fieldErrors.SUELDO_NUEVO}
                       />
                     </div>
-                    <Input
-                      label="Meses retroactivo"
-                      type="number"
-                      step="0.1"
-                      value={formData.MESES_RETRO}
-                      onChange={e => setFormData({ ...formData, MESES_RETRO: e.target.value })}
-                      required
-                    />
+
+                    {/* Payroll Type Toggle */}
+                    <div className="space-y-2 pt-2">
+                      <label className="text-sm font-medium text-brand-dark">Tipo de nómina</label>
+                      <Toggle
+                        options={[
+                          { label: 'Mensual', value: 'mensual' },
+                          { label: 'Quincenal', value: 'quincenal' }
+                        ]}
+                        value={payrollType}
+                        onChange={setPayrollType}
+                      />
+                      <p className="text-xs text-slate-500">
+                        {payrollType === 'mensual'
+                          ? 'Se calcularán meses completos (1 al 30/31).'
+                          : 'Se calcularán periodos cerrados (1-15 y 16-Fin).'}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <DateInput
+                        label="Desde"
+                        value={formData.FECHA_INICIO}
+                        onChange={e => setFormData({ ...formData, FECHA_INICIO: e.target.value })}
+                        error={fieldErrors.FECHA_INICIO}
+                      />
+                      <DateInput
+                        label="Hasta"
+                        value={formData.FECHA_FIN}
+                        onChange={e => setFormData({ ...formData, FECHA_FIN: e.target.value })}
+                        error={fieldErrors.FECHA_FIN}
+                      />
+                    </div>
 
                     <div className="pt-2 border-t border-slate-100">
                       <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Horas Extras (Cantidad)</p>
@@ -367,34 +690,49 @@ function App() {
                   </form>
                 ) : (
                   <div className="space-y-6 text-center">
-                    <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:bg-slate-50 transition-colors relative">
-                      <input
-                        type="file"
-                        accept=".xlsx, .xls"
-                        onChange={handleFileUpload}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        disabled={isProcessing}
-                      />
-                      <div className="flex flex-col items-center gap-3">
-                        <div className="w-12 h-12 bg-brand-light text-brand-primary rounded-full flex items-center justify-center">
-                          <Upload className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-900">Arrastra tu archivo aquí</p>
-                          <p className="text-sm text-slate-500">o haz clic para seleccionar</p>
-                        </div>
-                        <p className="text-xs text-slate-400">Máximo 10.000 filas</p>
+                    {/* Mass Upload Section */}
+                    <div className="space-y-4">
+                      <div className="text-left space-y-2">
+                        <label className="text-sm font-medium text-brand-dark">Tipo de Nómina para el cálculo</label>
+                        <Toggle
+                          options={[
+                            { label: 'Mensual', value: 'mensual' },
+                            { label: 'Quincenal', value: 'quincenal' }
+                          ]}
+                          value={payrollType}
+                          onChange={setPayrollType}
+                        />
                       </div>
-                    </div>
 
-                    <div className="flex flex-col gap-2">
-                      <Button variant="outline" onClick={downloadTemplate} className="w-full text-sm">
-                        <FileSpreadsheet className="w-4 h-4" />
-                        Descargar Plantilla
-                      </Button>
-                      <p className="text-xs text-slate-400 px-4">
-                        Usa la plantilla para asegurar que las columnas sean correctas.
-                      </p>
+                      <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:bg-slate-50 transition-colors relative">
+                        <input
+                          type="file"
+                          accept=".xlsx, .xls"
+                          onChange={handleFileUpload}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          disabled={isProcessing}
+                        />
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="w-12 h-12 bg-brand-light text-brand-primary rounded-full flex items-center justify-center">
+                            <Upload className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-slate-900">Arrastra tu archivo aquí</p>
+                            <p className="text-sm text-slate-500">o haz clic para seleccionar</p>
+                          </div>
+                          <p className="text-xs text-slate-400">Máximo 10.000 filas</p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <Button variant="outline" onClick={downloadTemplate} className="w-full text-sm">
+                          <FileSpreadsheet className="w-4 h-4" />
+                          Descargar Plantilla
+                        </Button>
+                        <p className="text-xs text-slate-400 px-4">
+                          Usa la plantilla para asegurar que las columnas sean correctas.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -448,6 +786,7 @@ function App() {
                         <th className="px-4 py-3">Cédula</th>
                         <th className="px-4 py-3">Nombre</th>
                         <th className="px-4 py-3">Concepto</th>
+                        <th className="px-4 py-3">Detalle</th>
                         <th className="px-4 py-3 text-right">Valor a pagar</th>
                       </tr>
                     </thead>
@@ -458,6 +797,9 @@ function App() {
                           <td className="px-4 py-3 font-medium text-slate-900">{row.NOMBRE}</td>
                           <td className="px-4 py-3 text-slate-600">
                             <Badge variant="default">{row.CONCEPTO}</Badge>
+                          </td>
+                          <td className="px-4 py-3 text-slate-500 text-xs">
+                            {row.DETALLE}
                           </td>
                           <td className="px-4 py-3 text-right font-mono font-medium text-brand-primary">
                             $ {row.VALOR_A_PAGAR.toLocaleString()}
