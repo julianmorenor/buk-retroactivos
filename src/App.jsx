@@ -395,6 +395,13 @@ function App() {
     RN_CANTIDAD: ''
   });
 
+  // Mass Form State
+  const [massFormData, setMassFormData] = useState({
+    SUELDO_NUEVO: '',
+    FECHA_INICIO: '',
+    FECHA_FIN: ''
+  });
+
   const handleIndividualCalculate = (e) => {
     e.preventDefault();
 
@@ -434,8 +441,23 @@ function App() {
   };
 
   const handleFileUpload = async (e) => {
+    e.preventDefault();
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Validate global inputs
+    const newErrors = {};
+    if (!massFormData.SUELDO_NUEVO) newErrors.SUELDO_NUEVO = true;
+    if (!massFormData.FECHA_INICIO) newErrors.FECHA_INICIO = true;
+    if (!massFormData.FECHA_FIN) newErrors.FECHA_FIN = true;
+    setFieldErrors(newErrors);
+
+    if (Object.keys(newErrors).length > 0) {
+      setError("Por favor complete los datos globales (Sueldo, Fechas) antes de cargar el archivo.");
+      // Reset file input value so user can try again with same file after fixing errors
+      e.target.value = '';
+      return;
+    }
 
     setIsProcessing(true);
     setError(null);
@@ -447,39 +469,82 @@ function App() {
       const workbook = XLSX.read(data);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
-      const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, dateNF: 'yyyy-mm-dd' });
+      // The user says header is at A6 (row 5 0-indexed). Data starts at row 6 (0-indexed).
+      // We'll read with header:1 to get array of arrays
+      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, range: 5 });
 
-      if (jsonData.length === 0) {
-        throw new Error("El archivo parece estar vacío o no se pudieron leer datos.");
+      // Row 0 is now the header row (A6, B6...)
+      // Data is Row 1+
+
+      if (rows.length < 2) {
+        throw new Error("El archivo parece no tener datos (filas insuficientes).");
       }
 
-      if (jsonData.length > 10000) {
-        throw new Error("El archivo excede el límite de 10.000 filas.");
-      }
-
-      // Validate headers
-      const firstRow = jsonData[0];
-      const requiredKeys = ['FECHA_INICIO', 'FECHA_FIN', 'SUELDO_ANTERIOR', 'SUELDO_NUEVO'];
-      const missingKeys = requiredKeys.filter(key => !(key in firstRow));
-
-      if (missingKeys.length > 0) {
-        throw new Error(`Faltan columnas requeridas en el archivo: ${missingKeys.join(', ')}. Por favor use la plantilla.`);
-      }
+      // Headers check (Optional but good practice)
+      const headers = rows[0];
+      // Expected: A='Comprobante - Período', C='Colaborador - Número de Documento', etc.
+      // We'll trust the index positions as per user description:
+      // A(0): Period, B(1): Name, C(2): Doc, D(3): Ficha, E(4): Salary
+      // F(5): HEFD Val, G(6): HEFD Qty
+      // H(7): HED Val, I(8): HED Qty
+      // J(9): HEN Val, K(10): HEN Qty
+      // L(11): HEFN Val, M(12): HEFN Qty
 
       const allDetails = [];
-      const allSummaries = [];
+      const importItems = [];
 
-      jsonData.forEach(row => {
-        const { details, summaries } = calculateRetroactive(row, payrollType);
-        allDetails.push(...details);
-        allSummaries.push(...summaries);
-      });
+      // Iterate data rows
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length === 0) continue;
+
+        // Skip totals or empty lines if they exist
+        const cedula = row[2];
+        if (!cedula) continue;
+
+        // Map row to calculation input
+        const rowData = {
+          CEDULA: row[2],
+          NOMBRE: row[1],
+          CODIGO_FICHA_COLABORADOR: row[3],
+          SUELDO_ANTERIOR: row[4], // Column E
+          // OT Quantities
+          HEFD_CANTIDAD: row[6], // G
+          HED_CANTIDAD: row[8],  // I
+          HEN_CANTIDAD: row[10], // K
+          HEFN_CANTIDAD: row[12], // M
+          // Global Inputs
+          SUELDO_NUEVO: massFormData.SUELDO_NUEVO,
+          FECHA_INICIO: massFormData.FECHA_INICIO,
+          FECHA_FIN: massFormData.FECHA_FIN
+        };
+
+        const { details } = calculateRetroactive(rowData, payrollType);
+
+        if (details.length > 0) {
+          allDetails.push(...details);
+
+          // Map details to Importador Items format
+          // ['Código*', 'Número de Documento*', 'Código de Ficha Colaborador', 'Día de pago anticipo', 'Valor*', 'Detalle', 'Centro Costo']
+          details.forEach(det => {
+            importItems.push({
+              'Código*': '',
+              'Número de Documento*': det.CEDULA,
+              'Código de Ficha Colaborador': rowData.CODIGO_FICHA_COLABORADOR,
+              'Día de pago anticipo': '',
+              'Valor*': det.VALOR_A_PAGAR,
+              'Detalle': `${det.CONCEPTO} (${det.DETALLE})`,
+              'Centro Costo': ''
+            });
+          });
+        }
+      }
 
       if (allDetails.length === 0) {
-        setError("El archivo se procesó pero no se generaron resultados. Verifique que las fechas tengan el formato correcto (AAAA-MM-DD o DD/MM/AAAA) y cubran periodos válidos.");
+        setError("El archivo se procesó pero no se generaron resultados.");
       } else {
         setResults(allDetails);
-        setReportData(allSummaries);
+        setReportData(importItems);
       }
 
     } catch (err) {
@@ -487,27 +552,22 @@ function App() {
       setError(err.message || "Error al procesar el archivo.");
     } finally {
       setIsProcessing(false);
+      // Reset file input
+      e.target.value = '';
     }
   };
 
   const downloadTemplate = () => {
-    const headers = [
-      "CEDULA", "NOMBRE", "CODIGO_FICHA_COLABORADOR", "SUELDO_ANTERIOR", "SUELDO_NUEVO",
-      "FECHA_INICIO", "FECHA_FIN", "HED_CANTIDAD", "HEN_CANTIDAD",
-      "HEFD_CANTIDAD", "HEFN_CANTIDAD"
-    ];
-    const ws = XLSX.utils.aoa_to_sheet([headers]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template");
-    XLSX.writeFile(wb, "template_retroactivos.xlsx");
+    // Deprecated
   };
 
   const downloadReport = () => {
     if (reportData.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(reportData);
+    // Adjust column widths if needed? For now just dump data
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Reporte");
-    XLSX.writeFile(wb, "reporte_retroactivos.xlsx");
+    XLSX.utils.book_append_sheet(wb, ws, "Items");
+    XLSX.writeFile(wb, "importador_items.xlsx");
   };
 
   return (
@@ -705,15 +765,68 @@ function App() {
                     {/* Mass Upload Section */}
                     <div className="space-y-4">
                       <div className="text-left space-y-2">
-                        <label className="text-sm font-medium text-brand-dark">Tipo de Nómina para el cálculo</label>
-                        <Toggle
-                          options={[
-                            { label: 'Mensual', value: 'mensual' },
-                            { label: 'Quincenal', value: 'quincenal' }
-                          ]}
-                          value={payrollType}
-                          onChange={setPayrollType}
-                        />
+                        <label className="text-sm font-medium text-brand-dark">Configuración global para la carga</label>
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+                          <Input
+                            label="Sueldo base nuevo"
+                            type="number"
+                            placeholder="0"
+                            value={massFormData.SUELDO_NUEVO}
+                            onChange={e => setMassFormData({ ...massFormData, SUELDO_NUEVO: e.target.value })}
+                            error={fieldErrors.SUELDO_NUEVO}
+                          />
+                          <div className="grid grid-cols-2 gap-3">
+                            <CustomCalendar
+                              label="Desde"
+                              value={massFormData.FECHA_INICIO ? new Date(massFormData.FECHA_INICIO + 'T00:00:00') : null}
+                              onChange={(date) => {
+                                const year = date.getFullYear();
+                                const month = String(date.getMonth() + 1).padStart(2, '0');
+                                const day = String(date.getDate()).padStart(2, '0');
+                                setMassFormData({ ...massFormData, FECHA_INICIO: `${year}-${month}-${day}` });
+                              }}
+                              error={fieldErrors.FECHA_INICIO}
+                              payrollType={payrollType}
+                              dateType="start"
+                              placeholder="DD/MM/AAAA"
+                              align="left"
+                            />
+                            <CustomCalendar
+                              label="Hasta"
+                              value={massFormData.FECHA_FIN ? new Date(massFormData.FECHA_FIN + 'T00:00:00') : null}
+                              onChange={(date) => {
+                                const year = date.getFullYear();
+                                const month = String(date.getMonth() + 1).padStart(2, '0');
+                                const day = String(date.getDate()).padStart(2, '0');
+                                setMassFormData({ ...massFormData, FECHA_FIN: `${year}-${month}-${day}` });
+                              }}
+                              error={fieldErrors.FECHA_FIN}
+                              payrollType={payrollType}
+                              dateType="end"
+                              placeholder="DD/MM/AAAA"
+                              align="right"
+                            />
+                          </div>
+                          <div className="flex bg-slate-100 p-1 rounded-lg">
+                            {[
+                              { label: 'Mensual', value: 'mensual' },
+                              { label: 'Quincenal', value: 'quincenal' }
+                            ].map((option) => (
+                              <button
+                                key={option.value}
+                                onClick={() => setPayrollType(option.value)}
+                                className={cn(
+                                  "flex-1 py-1.5 px-3 rounded-md text-sm font-medium transition-all",
+                                  payrollType === option.value
+                                    ? "bg-white text-brand-primary shadow-sm"
+                                    : "text-slate-500 hover:text-slate-700"
+                                )}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
 
                       <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:bg-slate-50 transition-colors relative">
@@ -729,22 +842,14 @@ function App() {
                             <Upload className="w-6 h-6" />
                           </div>
                           <div>
-                            <p className="font-medium text-slate-900">Arrastra tu archivo aquí</p>
-                            <p className="text-sm text-slate-500">o haz clic para seleccionar</p>
+                            <p className="font-medium text-slate-900">Sube el reporte de Buk aquí</p>
+                            <p className="text-sm text-slate-500">Arrastra o haz clic para seleccionar</p>
                           </div>
-                          <p className="text-xs text-slate-400">Máximo 10.000 filas</p>
+                          <p className="text-xs text-slate-400">Sin modificar (desde fila A6)</p>
                         </div>
                       </div>
 
-                      <div className="flex flex-col gap-2">
-                        <Button variant="outline" onClick={downloadTemplate} className="w-full text-sm">
-                          <FileSpreadsheet className="w-4 h-4" />
-                          Descargar Plantilla
-                        </Button>
-                        <p className="text-xs text-slate-400 px-4">
-                          Usa la plantilla para asegurar que las columnas sean correctas.
-                        </p>
-                      </div>
+                      {/* Upload instructions or footer if needed */}
                     </div>
                   </div>
                 )}
