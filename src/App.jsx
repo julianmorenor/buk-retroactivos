@@ -498,9 +498,51 @@ function App() {
         const row = rows[i];
         if (!row || row.length === 0) continue;
 
-        // Skip totals or empty lines if they exist
         const cedula = row[2];
         if (!cedula) continue;
+
+        // 1. Parse Period (Column A)
+        let rowDate = null;
+        if (typeof row[0] === 'number') {
+          // Excel Serial Date
+          const parsed = XLSX.SSF.parse_date_code(row[0]);
+          rowDate = new Date(parsed.y, parsed.m - 1, parsed.d);
+        } else if (typeof row[0] === 'string') {
+          // Try parsing "D/M/YYYY" or "YYYY-MM-DD"
+          const parts = row[0].split(/[/-]/);
+          if (parts.length === 3) {
+            if (parts[0].length === 4) { // YYYY-MM-DD
+              rowDate = new Date(parts[0], parts[1] - 1, parts[2]);
+            } else { // DD/MM/YYYY
+              rowDate = new Date(parts[2], parts[1] - 1, parts[0]);
+            }
+          }
+        }
+
+        if (!rowDate || isNaN(rowDate.getTime())) continue; // Skip invalid dates
+
+        // 2. Validate against Global Range
+        // We use the start of the user selected global range to the end of the global range.
+        const globalStart = new Date(massFormData.FECHA_INICIO);
+        const globalEnd = new Date(massFormData.FECHA_FIN);
+
+        // Normalize time
+        rowDate.setHours(0, 0, 0, 0);
+        globalStart.setHours(0, 0, 0, 0);
+        globalEnd.setHours(0, 0, 0, 0);
+
+        // Check if rowDate falls within the global range
+        if (rowDate < globalStart || rowDate > globalEnd) continue;
+
+        // 3. Define Calculation Scope for this Row (The specific month of the row)
+        // We calculate retro ONLY for this specific month found in the row.
+        const rowYear = rowDate.getFullYear();
+        const rowMonth = rowDate.getMonth();
+        const lastDayOfRowMonth = new Date(rowYear, rowMonth + 1, 0).getDate();
+
+        // Format for consumption: YYYY-MM-DD
+        const periodStart = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-01`;
+        const periodEnd = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-${lastDayOfRowMonth}`;
 
         // Map row to calculation input
         const rowData = {
@@ -513,10 +555,10 @@ function App() {
           HED_CANTIDAD: row[8],  // I
           HEN_CANTIDAD: row[10], // K
           HEFN_CANTIDAD: row[12], // M
-          // Global Inputs
+          // Global Inputs - but use Per-Row Dates
           SUELDO_NUEVO: massFormData.SUELDO_NUEVO,
-          FECHA_INICIO: massFormData.FECHA_INICIO,
-          FECHA_FIN: massFormData.FECHA_FIN
+          FECHA_INICIO: periodStart, // Override global start with row specific start
+          FECHA_FIN: periodEnd       // Override global end with row specific end
         };
 
         const { details } = calculateRetroactive(rowData, payrollType);
