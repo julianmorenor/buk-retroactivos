@@ -15,6 +15,7 @@ import {
 import * as XLSX from 'xlsx';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { CustomCalendar } from './components/CustomCalendar';
 
 // Utility for Tailwind classes
 function cn(...inputs) {
@@ -26,8 +27,8 @@ function cn(...inputs) {
 const FACTORS = {
   HED: 1.25,
   HEN: 1.75,
-  HEFD: 2.0,
-  HEFN: 2.5,
+  HEFD: 2.05,
+  HEFN: 2.55,
   RN: 0.35
 };
 
@@ -173,8 +174,8 @@ const calculateRetroactive = (data, payrollType) => {
       key: 'HEFD_CANTIDAD',
       factor: FACTORS.HEFD,
       label: 'Retroactivo HE festiva diurna',
-      reportValKey: 'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.00)',
-      reportQtyKey: 'Comprobante - Hora Extra Diurna Dominical y Festivos (2.00)'
+      reportValKey: 'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.05)',
+      reportQtyKey: 'Comprobante - Hora Extra Diurna Dominical y Festivos (2.05)'
     },
     {
       key: 'HEFN_CANTIDAD',
@@ -200,8 +201,8 @@ const calculateRetroactive = (data, payrollType) => {
       'Colaborador - Número de Documento': data.CEDULA,
       'Colaborador - Código de Ficha': data.CODIGO_FICHA_COLABORADOR || '',
       'Devengos Prestacionales - Salario': 0,
-      'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.00)': 0,
-      'Comprobante - Hora Extra Diurna Dominical y Festivos (2.00)': 0,
+      'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.05)': 0,
+      'Comprobante - Hora Extra Diurna Dominical y Festivos (2.05)': 0,
       'Devengos Prestacionales - Hora Extra Diurna Ordinaria (1.25)': 0,
       'Comprobante - Hora Extra Diurna Ordinaria (1.25)': 0,
       'Devengos Prestacionales - Hora Extra Nocturna (1.75)': 0,
@@ -289,9 +290,8 @@ const Button = ({ children, variant = 'primary', className, ...props }) => {
 
 const Input = ({ label, error, ...props }) => (
   <div className="space-y-1.5">
-    <label className="text-sm font-medium text-brand-dark flex justify-between">
+    <label className="text-sm font-medium text-brand-dark block">
       {label}
-      {error && <span className="text-xs text-red-500 font-normal">Requerido</span>}
     </label>
     <input
       className={cn(
@@ -302,6 +302,7 @@ const Input = ({ label, error, ...props }) => (
       )}
       {...props}
     />
+    {error && <span className="text-xs text-red-500 font-normal block">Requerido</span>}
   </div>
 );
 
@@ -310,25 +311,18 @@ const DateInput = ({ label, error, ...props }) => {
 
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium text-brand-dark flex justify-between">
+      <label className="text-sm font-medium text-brand-dark block">
         {label}
-        {error && <span className="text-xs text-red-500 font-normal">Requerido</span>}
       </label>
       <div
         className="relative group cursor-pointer"
         onClick={() => inputRef.current?.showPicker()}
       >
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-          <CalendarDays className={cn(
-            "h-5 w-5 transition-colors",
-            error ? "text-red-400" : "text-brand-muted group-hover:text-brand-primary"
-          )} />
-        </div>
         <input
           ref={inputRef}
           type="date"
           className={cn(
-            "w-full pl-10 pr-3 py-2 rounded-lg border outline-none transition-all text-brand-dark cursor-pointer appearance-none",
+            "w-full px-3 py-2 rounded-lg border outline-none transition-all text-brand-dark cursor-pointer appearance-none",
             error
               ? "border-red-300 focus:ring-2 focus:ring-red-200 focus:border-red-400 bg-red-50/30"
               : "border-brand-muted/50 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary bg-white"
@@ -336,6 +330,7 @@ const DateInput = ({ label, error, ...props }) => {
           {...props}
         />
       </div>
+      {error && <span className="text-xs text-red-500 font-normal block">Requerido</span>}
     </div>
   );
 };
@@ -570,8 +565,8 @@ function App() {
 
           {/* Left Column: Input */}
           <div className="lg:col-span-1 space-y-6">
-            <Card className="overflow-hidden h-full">
-              <div className="flex border-b border-slate-200">
+            <Card className="h-full">
+              <div className="flex border-b border-slate-200 rounded-t-xl overflow-hidden">
                 <button
                   onClick={() => setActiveTab('individual')}
                   className={cn(
@@ -604,6 +599,7 @@ function App() {
                       <Input
                         label="Sueldo anterior"
                         type="number"
+                        placeholder="0"
                         value={formData.SUELDO_ANTERIOR}
                         onChange={e => setFormData({ ...formData, SUELDO_ANTERIOR: e.target.value })}
                         error={fieldErrors.SUELDO_ANTERIOR}
@@ -611,6 +607,7 @@ function App() {
                       <Input
                         label="Sueldo nuevo"
                         type="number"
+                        placeholder="0"
                         value={formData.SUELDO_NUEVO}
                         onChange={e => setFormData({ ...formData, SUELDO_NUEVO: e.target.value })}
                         error={fieldErrors.SUELDO_NUEVO}
@@ -636,17 +633,32 @@ function App() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
-                      <DateInput
+                      <CustomCalendar
                         label="Desde"
-                        value={formData.FECHA_INICIO}
-                        onChange={e => setFormData({ ...formData, FECHA_INICIO: e.target.value })}
+                        value={formData.FECHA_INICIO ? new Date(formData.FECHA_INICIO + 'T00:00:00') : null}
+                        onChange={(date) => {
+                          const year = date.getFullYear();
+                          const month = String(date.getMonth() + 1).padStart(2, '0');
+                          const day = String(date.getDate()).padStart(2, '0');
+                          setFormData({ ...formData, FECHA_INICIO: `${year}-${month}-${day}` });
+                        }}
                         error={fieldErrors.FECHA_INICIO}
+                        payrollType={payrollType}
+                        dateType="start"
                       />
-                      <DateInput
+                      <CustomCalendar
                         label="Hasta"
-                        value={formData.FECHA_FIN}
-                        onChange={e => setFormData({ ...formData, FECHA_FIN: e.target.value })}
+                        value={formData.FECHA_FIN ? new Date(formData.FECHA_FIN + 'T00:00:00') : null}
+                        onChange={(date) => {
+                          const year = date.getFullYear();
+                          const month = String(date.getMonth() + 1).padStart(2, '0');
+                          const day = String(date.getDate()).padStart(2, '0');
+                          setFormData({ ...formData, FECHA_FIN: `${year}-${month}-${day}` });
+                        }}
                         error={fieldErrors.FECHA_FIN}
+                        payrollType={payrollType}
+                        dateType="end"
+                        align="right"
                       />
                     </div>
 
@@ -668,14 +680,14 @@ function App() {
                           onChange={e => setFormData({ ...formData, HEN_CANTIDAD: e.target.value })}
                         />
                         <Input
-                          label="Fest. Diurna (2.0)"
+                          label="Fest. Diurna (2.05)"
                           type="number"
                           placeholder="0"
                           value={formData.HEFD_CANTIDAD}
                           onChange={e => setFormData({ ...formData, HEFD_CANTIDAD: e.target.value })}
                         />
                         <Input
-                          label="Fest. Noct. (2.5)"
+                          label="Fest. Noct. (2.55)"
                           type="number"
                           placeholder="0"
                           value={formData.HEFN_CANTIDAD}
