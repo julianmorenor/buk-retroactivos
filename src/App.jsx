@@ -868,6 +868,15 @@ function App() {
                               </button>
                             ))}
                           </div>
+                          <div className="bg-blue-50 p-3 rounded-lg flex gap-3 items-start">
+                            <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                            <p className="text-xs text-blue-800 leading-relaxed">
+                              <strong>¿Cómo funcionan las fechas?</strong><br />
+                              Las fechas "Desde" y "Hasta" definen el rango global del retroactivo.
+                              El sistema filtrará las filas de tu archivo Excel y solo procesará las que caigan dentro de este rango.
+                              El cálculo se hará mes a mes usando la fecha de cada fila.
+                            </p>
+                          </div>
                         </div>
                       </div>
 
