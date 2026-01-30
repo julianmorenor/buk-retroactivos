@@ -824,7 +824,7 @@ function App() {
                     </div>
 
                     <Button type="submit" className="w-full mt-4">
-                      Calcular retroactivo
+                      Calcular
                     </Button>
                   </form>
                 ) : (
@@ -870,7 +870,7 @@ function App() {
                           className="inline-flex items-center gap-2 text-sm text-brand-primary hover:text-brand-secondary font-semibold transition-colors bg-white px-4 py-2 rounded-lg border border-brand-muted/30 shadow-sm"
                         >
                           <Download className="w-4 h-4" />
-                          Descargar plantilla manual
+                          Descargar plantilla
                         </a>
                       </div>
 
