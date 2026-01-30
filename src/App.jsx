@@ -27,9 +27,11 @@ function cn(...inputs) {
 const FACTORS = {
   HED: 1.25,
   HEN: 1.75,
-  HEFD: 2.05,
+  HEFD: 2.00,
   HEFN: 2.55,
-  RN: 0.35
+  RN: 0.35,
+  RDDFH: 1.80,
+  RNDF: 1.15
 };
 
 const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
@@ -183,6 +185,27 @@ const calculateRetroactive = (data, payrollType) => {
       label: 'Retroactivo HE festiva nocturna',
       reportValKey: 'Devengos Prestacionales - Hora Extra Nocturna Dominical Y Festivos (2.55)',
       reportQtyKey: 'Comprobante - Hora Extra Nocturna Dominical Y Festivos (2.55)'
+    },
+    {
+      key: 'RN_CANTIDAD',
+      factor: FACTORS.RN,
+      label: 'Retroactivo Recargo nocturno',
+      reportValKey: 'Devengos Prestacionales - Hora Recargo Nocturno (0.35)',
+      reportQtyKey: 'Comprobante - Hora Recargo Nocturno (0.35)'
+    },
+    {
+      key: 'RDDFH_CANTIDAD',
+      factor: FACTORS.RDDFH,
+      label: 'Retroactivo Recargo diurno festivo',
+      reportValKey: 'Devengos Prestacionales - Hora Recargo Diurno Dominical Y Festivos Habitual (1.80)',
+      reportQtyKey: 'Comprobante - Hora Recargo Diurno Dominical y Festivos Habitual (1.80)'
+    },
+    {
+      key: 'RNDF_CANTIDAD',
+      factor: FACTORS.RNDF,
+      label: 'Retroactivo Recargo nocturno festivo',
+      reportValKey: 'Devengos Prestacionales - Hora Recargo Nocturno Dominical Y Festivos (1.15)',
+      reportQtyKey: 'Comprobante - Hora Recargo Nocturno Dominical y Festivos (1.15)'
     }
   ];
 
@@ -201,14 +224,20 @@ const calculateRetroactive = (data, payrollType) => {
       'Colaborador - Número de Documento': data.CEDULA,
       'Colaborador - Código de Ficha': data.CODIGO_FICHA_COLABORADOR || '',
       'Devengos Prestacionales - Salario': 0,
-      'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.05)': 0,
-      'Comprobante - Hora Extra Diurna Dominical y Festivos (2.05)': 0,
+      'Devengos Prestacionales - Hora Extra Diurna Dominical Y Festivos (2.00)': 0,
+      'Comprobante - Hora Extra Diurna Dominical y Festivos (2.00)': 0,
       'Devengos Prestacionales - Hora Extra Diurna Ordinaria (1.25)': 0,
       'Comprobante - Hora Extra Diurna Ordinaria (1.25)': 0,
       'Devengos Prestacionales - Hora Extra Nocturna (1.75)': 0,
       'Comprobante - Hora Extra Nocturna (1.75)': 0,
       'Devengos Prestacionales - Hora Extra Nocturna Dominical Y Festivos (2.55)': 0,
       'Comprobante - Hora Extra Nocturna Dominical Y Festivos (2.55)': 0,
+      'Devengos Prestacionales - Hora Recargo Diurno Dominical Y Festivos Habitual (1.80)': 0,
+      'Comprobante - Hora Recargo Diurno Dominical y Festivos Habitual (1.80)': 0,
+      'Devengos Prestacionales - Hora Recargo Nocturno (0.35)': 0,
+      'Comprobante - Hora Recargo Nocturno (0.35)': 0,
+      'Devengos Prestacionales - Hora Recargo Nocturno Dominical Y Festivos (1.15)': 0,
+      'Comprobante - Hora Recargo Nocturno Dominical y Festivos (1.15)': 0,
     };
 
     // Add Salary Retro
@@ -392,15 +421,13 @@ function App() {
     HEN_CANTIDAD: '',
     HEFD_CANTIDAD: '',
     HEFN_CANTIDAD: '',
-    RN_CANTIDAD: ''
+    RN_CANTIDAD: '',
+    RDDFH_CANTIDAD: '',
+    RNDF_CANTIDAD: ''
   });
 
-  // Mass Form State
-  const [massFormData, setMassFormData] = useState({
-    SUELDO_NUEVO: '',
-    FECHA_INICIO: '',
-    FECHA_FIN: ''
-  });
+  // No longer needed as data is in Excel row
+
 
   const handleIndividualCalculate = (e) => {
     e.preventDefault();
@@ -445,19 +472,8 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate global inputs
-    const newErrors = {};
-    if (!massFormData.SUELDO_NUEVO) newErrors.SUELDO_NUEVO = true;
-    if (!massFormData.FECHA_INICIO) newErrors.FECHA_INICIO = true;
-    if (!massFormData.FECHA_FIN) newErrors.FECHA_FIN = true;
-    setFieldErrors(newErrors);
+    // Validation of global inputs removed as data is now per-row in Excel
 
-    if (Object.keys(newErrors).length > 0) {
-      setError("Por favor complete los datos globales (Sueldo, Fechas) antes de cargar el archivo.");
-      // Reset file input value so user can try again with same file after fixing errors
-      e.target.value = '';
-      return;
-    }
 
     setIsProcessing(true);
     setError(null);
@@ -469,16 +485,24 @@ function App() {
       const workbook = XLSX.read(data);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
-      // The user says header is at A6 (row 5 0-indexed). Data starts at row 6 (0-indexed).
-      // We'll read with header:1 to get array of arrays
-      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, range: 5 });
+      const allRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-      // Row 0 is now the header row (A6, B6...)
-      // Data is Row 1+
-
-      if (rows.length < 2) {
-        throw new Error("El archivo parece no tener datos (filas insuficientes).");
+      let headerRowIndex = -1;
+      // Check A1 (row 0) or A6 (row 5)
+      if (allRows[0]?.[0] === "Comprobante - Período") {
+        headerRowIndex = 0;
+      } else if (allRows[5]?.[0] === "Comprobante - Período") {
+        headerRowIndex = 5;
       }
+
+      if (headerRowIndex === -1) {
+        throw new Error("No se encontró la cabecera 'Comprobante - Período' en la celda A1 ni A6. Verifique el formato del archivo.");
+      }
+
+      const rows = allRows.slice(headerRowIndex);
+
+      // Row 0 is now the header row
+      // Data is Row 1+
 
       // Headers check (Optional but good practice)
       const headers = rows[0];
@@ -521,28 +545,26 @@ function App() {
 
         if (!rowDate || isNaN(rowDate.getTime())) continue; // Skip invalid dates
 
-        // 2. Validate against Global Range
-        // We use the start of the user selected global range to the end of the global range.
-        const globalStart = new Date(massFormData.FECHA_INICIO);
-        const globalEnd = new Date(massFormData.FECHA_FIN);
-
-        // Normalize time
-        rowDate.setHours(0, 0, 0, 0);
-        globalStart.setHours(0, 0, 0, 0);
-        globalEnd.setHours(0, 0, 0, 0);
-
-        // Check if rowDate falls within the global range
-        if (rowDate < globalStart || rowDate > globalEnd) continue;
-
-        // 3. Define Calculation Scope for this Row (The specific month of the row)
-        // We calculate retro ONLY for this specific month found in the row.
+        // 2. Define Calculation Scope for this Row (The specific month or quincena of the row)
         const rowYear = rowDate.getFullYear();
         const rowMonth = rowDate.getMonth();
+        const rowDay = rowDate.getDate();
         const lastDayOfRowMonth = new Date(rowYear, rowMonth + 1, 0).getDate();
 
-        // Format for consumption: YYYY-MM-DD
-        const periodStart = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-01`;
-        const periodEnd = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-${lastDayOfRowMonth}`;
+        let periodStart, periodEnd;
+        if (payrollType === 'mensual') {
+          periodStart = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-01`;
+          periodEnd = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-${lastDayOfRowMonth}`;
+        } else {
+          // Quincenal: determine if 1st or 2nd quincena
+          if (rowDay <= 15) {
+            periodStart = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-01`;
+            periodEnd = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-15`;
+          } else {
+            periodStart = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-16`;
+            periodEnd = `${rowYear}-${String(rowMonth + 1).padStart(2, '0')}-${lastDayOfRowMonth}`;
+          }
+        }
 
         // Map row to calculation input
         const rowData = {
@@ -550,15 +572,18 @@ function App() {
           NOMBRE: row[1],
           CODIGO_FICHA_COLABORADOR: row[3],
           SUELDO_ANTERIOR: row[4], // Column E
-          // OT Quantities
-          HEFD_CANTIDAD: row[6], // G
-          HED_CANTIDAD: row[8],  // I
-          HEN_CANTIDAD: row[10], // K
-          HEFN_CANTIDAD: row[12], // M
-          // Global Inputs - but use Per-Row Dates
-          SUELDO_NUEVO: massFormData.SUELDO_NUEVO,
-          FECHA_INICIO: periodStart, // Override global start with row specific start
-          FECHA_FIN: periodEnd       // Override global end with row specific end
+          // OT Quantities (Updated indices to match A6:T6 template)
+          HEFD_CANTIDAD: row[7],  // H
+          HED_CANTIDAD: row[9],   // J
+          HEN_CANTIDAD: row[11],  // L
+          HEFN_CANTIDAD: row[13], // N
+          RDDFH_CANTIDAD: row[15], // P
+          RN_CANTIDAD: row[17],   // R
+          RNDF_CANTIDAD: row[19], // T
+          // Global Inputs removed - now using Per-Row Data
+          SUELDO_NUEVO: row[5],      // Column F
+          FECHA_INICIO: periodStart,
+          FECHA_FIN: periodEnd
         };
 
         const { details } = calculateRetroactive(rowData, payrollType);
@@ -782,7 +807,7 @@ function App() {
                           onChange={e => setFormData({ ...formData, HEN_CANTIDAD: e.target.value })}
                         />
                         <Input
-                          label="Fest. Diurna (2.05)"
+                          label="Fest. Diurna (2.00)"
                           type="number"
                           placeholder="0"
                           value={formData.HEFD_CANTIDAD}
@@ -806,81 +831,19 @@ function App() {
                   <div className="space-y-6 text-center">
                     {/* Mass Upload Section */}
                     <div className="space-y-4">
-                      <div className="text-left space-y-2">
-                        <label className="text-sm font-medium text-brand-dark">Configuración global para la carga</label>
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
-                          <Input
-                            label="Sueldo base nuevo"
-                            type="number"
-                            placeholder="0"
-                            value={massFormData.SUELDO_NUEVO}
-                            onChange={e => setMassFormData({ ...massFormData, SUELDO_NUEVO: e.target.value })}
-                            error={fieldErrors.SUELDO_NUEVO}
-                          />
-                          <div className="grid grid-cols-2 gap-3">
-                            <CustomCalendar
-                              label="Desde"
-                              value={massFormData.FECHA_INICIO ? new Date(massFormData.FECHA_INICIO + 'T00:00:00') : null}
-                              onChange={(date) => {
-                                const year = date.getFullYear();
-                                const month = String(date.getMonth() + 1).padStart(2, '0');
-                                const day = String(date.getDate()).padStart(2, '0');
-                                setMassFormData({ ...massFormData, FECHA_INICIO: `${year}-${month}-${day}` });
-                              }}
-                              error={fieldErrors.FECHA_INICIO}
-                              payrollType={payrollType}
-                              dateType="start"
-                              placeholder="DD/MM/AAAA"
-                              align="left"
-                            />
-                            <CustomCalendar
-                              label="Hasta"
-                              value={massFormData.FECHA_FIN ? new Date(massFormData.FECHA_FIN + 'T00:00:00') : null}
-                              onChange={(date) => {
-                                const year = date.getFullYear();
-                                const month = String(date.getMonth() + 1).padStart(2, '0');
-                                const day = String(date.getDate()).padStart(2, '0');
-                                setMassFormData({ ...massFormData, FECHA_FIN: `${year}-${month}-${day}` });
-                              }}
-                              error={fieldErrors.FECHA_FIN}
-                              payrollType={payrollType}
-                              dateType="end"
-                              placeholder="DD/MM/AAAA"
-                              align="right"
-                            />
-                          </div>
-                          <div className="flex bg-slate-100 p-1 rounded-lg">
-                            {[
-                              { label: 'Mensual', value: 'mensual' },
-                              { label: 'Quincenal', value: 'quincenal' }
-                            ].map((option) => (
-                              <button
-                                key={option.value}
-                                onClick={() => setPayrollType(option.value)}
-                                className={cn(
-                                  "flex-1 py-1.5 px-3 rounded-md text-sm font-medium transition-all",
-                                  payrollType === option.value
-                                    ? "bg-white text-brand-primary shadow-sm"
-                                    : "text-slate-500 hover:text-slate-700"
-                                )}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="bg-blue-50 p-3 rounded-lg flex gap-3 items-start">
-                            <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-                            <p className="text-xs text-blue-800 leading-relaxed">
-                              <strong>¿Cómo funcionan las fechas?</strong><br />
-                              Las fechas "Desde" y "Hasta" definen el rango global del retroactivo.
-                              El sistema filtrará las filas de tu archivo Excel y solo procesará las que caigan dentro de este rango.
-                              El cálculo se hará mes a mes usando la fecha de cada fila.
-                            </p>
-                          </div>
-                        </div>
+                      <div className="text-left space-y-3">
+                        <label className="text-sm font-semibold text-brand-dark uppercase tracking-wider">Configuración de la carga</label>
+                        <Toggle
+                          options={[
+                            { label: 'Mensual', value: 'mensual' },
+                            { label: 'Quincenal', value: 'quincenal' }
+                          ]}
+                          value={payrollType}
+                          onChange={setPayrollType}
+                        />
                       </div>
 
-                      <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 hover:bg-slate-50 transition-colors relative">
+                      <div className="border-2 border-dashed border-slate-300 rounded-xl p-10 hover:bg-slate-50 transition-colors relative">
                         <input
                           type="file"
                           accept=".xlsx, .xls"
@@ -889,15 +852,26 @@ function App() {
                           disabled={isProcessing}
                         />
                         <div className="flex flex-col items-center gap-3">
-                          <div className="w-12 h-12 bg-brand-light text-brand-primary rounded-full flex items-center justify-center">
-                            <Upload className="w-6 h-6" />
+                          <div className="w-14 h-14 bg-brand-light text-brand-primary rounded-full flex items-center justify-center">
+                            <Upload className="w-7 h-7" />
                           </div>
-                          <div>
-                            <p className="font-medium text-slate-900">Sube el reporte de Buk aquí</p>
-                            <p className="text-sm text-slate-500">Arrastra o haz clic para seleccionar</p>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-slate-900 text-lg">Sube tu reporte aquí</p>
+                            <p className="text-sm text-slate-500">Arrastra o haz clic para seleccionar su archivo</p>
                           </div>
-                          <p className="text-xs text-slate-400">Sin modificar (desde fila A6)</p>
+                          <p className="text-xs text-slate-400">Detección automática de cabeceras (Fila 1 o 6)</p>
                         </div>
+                      </div>
+
+                      <div className="pt-2">
+                        <a
+                          href="/templates/template_reporte_pagos.xlsx"
+                          download
+                          className="inline-flex items-center gap-2 text-sm text-brand-primary hover:text-brand-secondary font-semibold transition-colors bg-white px-4 py-2 rounded-lg border border-brand-muted/30 shadow-sm"
+                        >
+                          <Download className="w-4 h-4" />
+                          Descargar plantilla manual
+                        </a>
                       </div>
 
                       {/* Upload instructions or footer if needed */}
